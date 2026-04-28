@@ -1,0 +1,2 @@
+# This directory holds trained ML model files (.pkl).
+# Run 'python -m ml.trainer' to generate them.

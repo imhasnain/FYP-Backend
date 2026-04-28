@@ -1,0 +1,39 @@
+# ============================================================
+# Multimodal Virtual Clinic — Backend Requirements
+# Python 3.10+ recommended
+# Install: pip install -r requirements.txt
+# ============================================================
+
+# --- Web Framework ---
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+
+# --- Database ---
+pyodbc==5.1.0
+
+# --- Authentication ---
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# --- Form / File handling ---
+python-multipart==0.0.9
+
+# --- Data Validation ---
+pydantic==2.7.1
+pydantic-settings==2.2.1
+
+# --- EEG / LSL ---
+pylsl==1.16.2
+muselsl==2.2.1
+
+# --- Bluetooth (BLE BP Machine) ---
+bleak==0.21.1
+
+# --- Facial Emotion Detection ---
+deepface==0.0.91
+opencv-python==4.9.0.80
+tf-keras==2.16.0
+
+# --- Utility ---
+python-dotenv==1.0.1
+numpy==1.26.4
