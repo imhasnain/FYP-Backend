@@ -55,9 +55,12 @@ def preprocess_emotions(session_id: int, conn) -> Dict[str, object]:
 
     try:
         cursor = conn.cursor()
+        # FacialEmotions actual schema:
+        # dominant_emotion, happy, sad, angry, fear, surprise, disgust, neutral
         cursor.execute(
             """
-            SELECT emotion_label, confidence
+            SELECT dominant_emotion, happy, sad, angry, fear,
+                   surprise, disgust, neutral
             FROM FacialEmotions
             WHERE session_id = ?
             ORDER BY captured_at ASC
@@ -70,36 +73,44 @@ def preprocess_emotions(session_id: int, conn) -> Dict[str, object]:
             logger.info("No emotion data for session %d.", session_id)
             return defaults
 
-        # ── Count each emotion label ─────────────────────────
+        # ── Count dominant emotions & compute distress ───────────────────
         labels = []
         weighted_distress_sum = 0.0
         weight_sum = 0.0
 
         for row in rows:
-            label = (row.emotion_label or "undetected").lower()
-            confidence = float(row.confidence) if row.confidence is not None else 50.0
-
+            label = (row.dominant_emotion or "undetected").lower()
             labels.append(label)
 
-            # Weight the distress score by the detection confidence
+            # Build a total-confidence weight from all emotion scores for this frame
+            frame_total = (
+                (row.happy or 0.0) + (row.sad or 0.0) + (row.angry or 0.0)
+                + (row.fear or 0.0) + (row.surprise or 0.0)
+                + (row.disgust or 0.0) + (row.neutral or 0.0)
+            )
+            # Use dominant emotion's raw score as the confidence weight
+            dom_score = getattr(row, label, None)
+            if dom_score is None:
+                dom_score = 50.0
+            norm_conf = (dom_score / 100.0) if dom_score > 1.0 else dom_score
+
             distress = EMOTION_DISTRESS_MAP.get(label, 0.3)
-            # Confidence from DeepFace is 0–100, normalize to 0–1
-            norm_conf = confidence / 100.0 if confidence > 1.0 else confidence
             weighted_distress_sum += distress * norm_conf
             weight_sum += norm_conf
 
-        emotion_counts = dict(Counter(labels))
+        emotion_counts = {}
+        for lbl in labels:
+            emotion_counts[lbl] = emotion_counts.get(lbl, 0) + 1
 
-        # ── Dominant emotion (most frequent) ─────────────────
-        dominant_emotion = Counter(labels).most_common(1)[0][0]
+        # ── Dominant emotion (most frequent) ──────────────────────────
+        dominant_emotion = max(emotion_counts, key=emotion_counts.get)
 
-        # ── Weighted distress score ──────────────────────────
+        # ── Weighted distress score ──────────────────────────────
         if weight_sum > 0:
             emotion_distress_score = weighted_distress_sum / weight_sum
         else:
             emotion_distress_score = EMOTION_DISTRESS_MAP.get(dominant_emotion, 0.3)
 
-        # Clamp to [0, 1]
         emotion_distress_score = max(0.0, min(1.0, emotion_distress_score))
 
         logger.info(

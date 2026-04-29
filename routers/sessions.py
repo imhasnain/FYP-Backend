@@ -24,6 +24,15 @@ from utils.time_utils import now_utc
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/session", tags=["Sessions"])
 
+# Maps ML recommendation labels → MH_Results.risk_class CHECK constraint values
+# DB allows: 'Healthy' | 'Mild Stress' | 'Moderate Risk' | 'High Risk' | 'Critical Risk'
+RECOMMENDATION_TO_RISK = {
+    "Normal":           "Healthy",
+    "Calm Down":        "Mild Stress",
+    "See Psychologist": "High Risk",
+    "Emergency":        "Critical Risk",
+}
+
 
 @router.post("/start", response_model=StartSessionResponse)
 def start_session(payload: StartSessionRequest):
@@ -172,27 +181,35 @@ def end_session(payload: EndSessionRequest):
         final_score = round(q_final, 4)
 
         # ── 7. Save to MH_Results ─────────────────────────
+        # Map recommendation -> risk_class (CHECK constrained column)
+        risk_class = RECOMMENDATION_TO_RISK.get(recommendation, "Moderate Risk")
         calculated_at = now_utc()
         cursor.execute(
             """
             INSERT INTO MH_Results (
-                session_id, user_role,
+                session_id, user_id,
                 emotional_score, functional_score, context_score,
-                isolation_score, critical_score, performance_score,
+                isolation_score, critical_score,
+                final_score, risk_class,
+                user_role, performance_score,
                 eeg_stress_index, eeg_alpha_power, eeg_theta_power,
                 hr_mean, bp_avg_systolic, bp_avg_diastolic, pulse_avg,
                 dominant_emotion, emotion_distress_score,
-                final_score, recommendation, confidence, calculated_at
+                recommendation, confidence, calculated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                payload.session_id, role,
+                payload.session_id,
+                payload.user_id,                          # NOT NULL
                 components["emotional_score"],
                 components["functional_score"],
                 components["context_score"],
                 components["isolation_score"],
                 components["critical_score"],
+                final_score,                              # NOT NULL
+                risk_class,                               # risk_class NOT NULL (CHECK constrained)
+                role,                                     # user_role
                 components["performance_score"],
                 components["eeg_stress_index"],
                 components["eeg_alpha_power"],
@@ -203,8 +220,7 @@ def end_session(payload: EndSessionRequest):
                 components["pulse_avg"],
                 components["dominant_emotion"],
                 components["emotion_distress_score"],
-                final_score,
-                recommendation,
+                recommendation,                           # recommendation (nullable)
                 confidence,
                 calculated_at,
             ),

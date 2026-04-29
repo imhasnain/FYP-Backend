@@ -87,32 +87,32 @@ def run_migrations():
 
     for col_name, col_def in sensor_columns:
         if _column_exists(cursor, "SensorData", col_name):
-            print(f"  ✅ SensorData.{col_name} — already exists, skipping.")
+            print(f"  [OK]   SensorData.{col_name} -- already exists, skipping.")
         else:
             try:
                 sql = f"ALTER TABLE SensorData ADD {col_name} {col_def}"
                 cursor.execute(sql)
                 conn.commit()
-                print(f"  ✅ SensorData.{col_name} — added successfully.")
+                print(f"  [OK]   SensorData.{col_name} -- added successfully.")
             except pyodbc.Error as exc:
                 conn.rollback()
-                print(f"  ❌ SensorData.{col_name} — FAILED: {exc}")
+                print(f"  [FAIL] SensorData.{col_name} -- FAILED: {exc}")
 
     # ── 2. Q_Responses — add stage_number ────────────────────
     if _column_exists(cursor, "Q_Responses", "stage_number"):
-        print(f"  ✅ Q_Responses.stage_number — already exists, skipping.")
+        print(f"  [OK]   Q_Responses.stage_number -- already exists, skipping.")
     else:
         try:
             cursor.execute("ALTER TABLE Q_Responses ADD stage_number INT NULL")
             conn.commit()
-            print(f"  ✅ Q_Responses.stage_number — added successfully.")
+            print(f"  [OK]   Q_Responses.stage_number -- added successfully.")
         except pyodbc.Error as exc:
             conn.rollback()
-            print(f"  ❌ Q_Responses.stage_number — FAILED: {exc}")
+            print(f"  [FAIL] Q_Responses.stage_number -- FAILED: {exc}")
 
     # ── 3. MH_Results table ──────────────────────────────────
     if _table_exists(cursor, "MH_Results"):
-        print(f"  ✅ MH_Results table — already exists, skipping.")
+        print(f"  [OK]   MH_Results table -- already exists, skipping.")
     else:
         try:
             cursor.execute(
@@ -144,10 +144,10 @@ def run_migrations():
                 """
             )
             conn.commit()
-            print(f"  ✅ MH_Results table — created successfully.")
+            print(f"  [OK]   MH_Results table -- created successfully.")
         except pyodbc.Error as exc:
             conn.rollback()
-            print(f"  ❌ MH_Results table — FAILED: {exc}")
+            print(f"  [FAIL] MH_Results table -- FAILED: {exc}")
 
     # ── 4. Add missing columns to MH_Results if it exists ────
     #    (covers case where table was created in a prior version
@@ -174,10 +174,43 @@ def run_migrations():
                     sql = f"ALTER TABLE MH_Results ADD {col_name} {col_def}"
                     cursor.execute(sql)
                     conn.commit()
-                    print(f"  ✅ MH_Results.{col_name} — added successfully.")
+                    print(f"  [OK]   MH_Results.{col_name} -- added successfully.")
                 except pyodbc.Error as exc:
                     conn.rollback()
-                    print(f"  ❌ MH_Results.{col_name} — FAILED: {exc}")
+                    print(f"  [FAIL] MH_Results.{col_name} -- FAILED: {exc}")
+
+    # ── 5. EmotionImages table ───────────────────────────────
+    if _table_exists(cursor, "EmotionImages"):
+        print(f"  [OK]   EmotionImages table -- already exists, skipping.")
+    else:
+        try:
+            cursor.execute(
+                """
+                CREATE TABLE EmotionImages (
+                    image_id INT IDENTITY(1,1) PRIMARY KEY,
+                    user_id INT REFERENCES Users(user_id),
+                    session_id INT REFERENCES Sessions(session_id),
+                    image_name VARCHAR(255),
+                    captured_at DATETIME DEFAULT GETDATE()
+                )
+                """
+            )
+            conn.commit()
+            print(f"  [OK]   EmotionImages table -- created successfully.")
+        except pyodbc.Error as exc:
+            conn.rollback()
+            print(f"  [FAIL] EmotionImages table -- FAILED: {exc}")
+
+    # ── 6. FacialEmotions — add image_id ─────────────────────
+    if _table_exists(cursor, "FacialEmotions"):
+        if not _column_exists(cursor, "FacialEmotions", "image_id"):
+            try:
+                cursor.execute("ALTER TABLE FacialEmotions ADD image_id INT REFERENCES EmotionImages(image_id) NULL")
+                conn.commit()
+                print(f"  [OK]   FacialEmotions.image_id -- added successfully.")
+            except pyodbc.Error as exc:
+                conn.rollback()
+                print(f"  [FAIL] FacialEmotions.image_id -- FAILED: {exc}")
 
     conn.close()
 

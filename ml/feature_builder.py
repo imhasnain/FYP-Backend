@@ -209,6 +209,7 @@ def _get_student_academic(user_id: int, conn) -> dict:
     }
     try:
         cursor = conn.cursor()
+        # Students actual columns: user_id, cgpa_trend, attendance_drop
         cursor.execute(
             """
             SELECT cgpa_trend, attendance_drop
@@ -221,22 +222,7 @@ def _get_student_academic(user_id: int, conn) -> dict:
         if row:
             defaults["cgpa_trend"] = float(row.cgpa_trend or 0.0)
             defaults["attendance_drop"] = float(row.attendance_drop or 0.0)
-
-        # Count failed / total courses
-        cursor.execute(
-            """
-            SELECT
-                COUNT(*) AS total_courses,
-                SUM(CASE WHEN grade = 'F' OR status = 'failed' THEN 1 ELSE 0 END) AS failed
-            FROM Enrollments
-            WHERE student_id = ?
-            """,
-            (user_id,),
-        )
-        enroll_row = cursor.fetchone()
-        if enroll_row and enroll_row.total_courses > 0:
-            defaults["total_courses"] = int(enroll_row.total_courses)
-            defaults["failed_courses"] = int(enroll_row.failed or 0)
+        # Enrollments table does not exist in this DB -- skip failed-course count
 
     except Exception as exc:
         logger.warning("Could not fetch student academic data for user %d: %s", user_id, exc)
@@ -258,9 +244,10 @@ def _get_teacher_workload(user_id: int, conn) -> dict:
     defaults = {"course_load": 0.0, "feedback_trend": 0.0}
     try:
         cursor = conn.cursor()
+        # Teachers actual columns: user_id, workload_hrs, class_count
         cursor.execute(
             """
-            SELECT course_load, feedback_trend
+            SELECT workload_hrs, class_count
             FROM Teachers
             WHERE user_id = ?
             """,
@@ -268,8 +255,9 @@ def _get_teacher_workload(user_id: int, conn) -> dict:
         )
         row = cursor.fetchone()
         if row:
-            defaults["course_load"] = float(row.course_load or 0.0)
-            defaults["feedback_trend"] = float(row.feedback_trend or 0.0)
+            # Map workload_hrs -> course_load, class_count -> feedback_trend proxy
+            defaults["course_load"] = float(row.workload_hrs or 0.0)
+            defaults["feedback_trend"] = float(row.class_count or 0.0)
     except Exception as exc:
         logger.warning("Could not fetch teacher data for user %d: %s", user_id, exc)
 

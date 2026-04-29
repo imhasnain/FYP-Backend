@@ -67,8 +67,10 @@ This generates synthetic training data and trains two RandomForest models:
 
 ### 5. Start Muse EEG Stream (optional, only if hardware is connected)
 
+If you have a Muse headset connected via Bluetooth, the backend can **automatically start** the background `muselsl stream --ppg` process. Alternatively, you can run it manually:
+
 ```bash
-muselsl stream
+muselsl stream --ppg
 ```
 
 ### 6. Start the Server
@@ -176,9 +178,9 @@ backend/
 1. User logs in → gets JWT token
 2. App starts session → gets session_id
 3. Three parallel data streams begin:
-   - Camera captures every 5s → `POST /sensors/emotion`
-   - BP cuff readings → `POST /sensors/bp`
-   - EEG via WebSocket → `WS /ws/eeg/{session_id}`
+   - Camera captures every 5s → `POST /sensors/emotion` (Saves frame to `emotion_images/` & detects emotion)
+   - BP cuff readings → `POST /sensors/bp` (Calculates baseline/delta if applicable)
+   - EEG via WebSocket → `WS /ws/eeg/{session_id}` (Auto-starts `muselsl` if needed)
 4. User completes questionnaire stages 1–5
 5. App ends session → backend runs full ML pipeline → returns recommendation
 6. Result displayed with confidence and score breakdown

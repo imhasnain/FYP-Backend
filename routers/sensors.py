@@ -69,7 +69,7 @@ def record_pulse(payload: PulseRequest):
             """
             INSERT INTO SensorData
                 (session_id, pulse_rate, data_type, recorded_at)
-            VALUES (?, ?, 'pulse', ?)
+            VALUES (?, ?, 'ppg', ?)
             """,
             (payload.session_id, int(payload.pulse_rate), recorded_at),
         )
@@ -274,18 +274,27 @@ def analyze_emotion(payload: EmotionRequest):
     try:
         cursor = conn.cursor()
 
+        # Map DeepFace emotion scores to individual columns
+        # DeepFace returns percentages 0–100; store as floats
+        scores = emotion_scores  # dict: {emotion: score}
         cursor.execute(
             """
             INSERT INTO FacialEmotions
-                (user_id, session_id, emotion_label, confidence,
+                (session_id, dominant_emotion,
+                 happy, sad, angry, fear, surprise, disgust, neutral,
                  captured_at, image_id)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                payload.user_id,
                 payload.session_id,
                 dominant_emotion,
-                confidence,
+                scores.get("happy", 0.0),
+                scores.get("sad", 0.0),
+                scores.get("angry", 0.0),
+                scores.get("fear", 0.0),
+                scores.get("surprise", 0.0),
+                scores.get("disgust", 0.0),
+                scores.get("neutral", 0.0),
                 captured_at,
                 image_id,
             ),
@@ -293,8 +302,8 @@ def analyze_emotion(payload: EmotionRequest):
         conn.commit()
 
         logger.info(
-            "Emotion captured: session=%d user=%d dominant=%s confidence=%.1f%% image=%s",
-            payload.session_id, payload.user_id, dominant_emotion, confidence, image_name,
+            "Emotion captured: session=%d dominant=%s image=%s",
+            payload.session_id, dominant_emotion, image_name,
         )
 
     except Exception as exc:

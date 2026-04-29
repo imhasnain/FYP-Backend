@@ -15,7 +15,7 @@ class PulseRequest(BaseModel):
 
     session_id: int
     pulse_rate: float
-    source: str  # 'muse' | 'bp_machine'
+    source: str = "muse"  # 'muse' | 'bp_machine'
 
 
 class PulseResponse(BaseModel):
@@ -23,7 +23,7 @@ class PulseResponse(BaseModel):
 
     session_id: int
     pulse_rate: float
-    source: str
+    source: str = "muse"
     recorded_at: datetime
 
 
