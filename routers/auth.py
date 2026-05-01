@@ -1,11 +1,6 @@
-# ============================================================
-# routers/auth.py — Authentication endpoints
-#   POST /auth/register
-#   POST /auth/login
-# ============================================================
+"""routers/auth.py — Authentication endpoints"""
 
 import logging
-import pyodbc
 from fastapi import APIRouter, HTTPException, status
 
 from database import get_connection
@@ -18,59 +13,30 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 @router.post("/login", response_model=LoginResponse)
 def login(payload: LoginRequest):
-    """
-    Authenticate a user and return a JWT access token.
-
-    Steps:
-      1. Look up the user by email.
-      2. Verify the password.
-      3. Generate a signed JWT token.
-      4. Return token + user_id + role.
-    """
     conn = get_connection()
     try:
         cursor = conn.cursor()
-
-        # ── 1. Look up user ───────────────────────────────
         cursor.execute(
             "SELECT user_id, password, role FROM Users WHERE email = ?",
             (payload.email,),
         )
         row = cursor.fetchone()
 
-        if not row:
-            # Do NOT reveal whether the email exists — use generic message
+        if not row or payload.password != row.password:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid email or password.",
             )
 
-        user_id, stored_password, role = row.user_id, row.password, row.role
+        token = create_token(user_id=row.user_id, role=row.role)
+        logger.info("User logged in: user_id=%d role=%s", row.user_id, row.role)
 
-        # ── 2. Verify password ────────────────────────────
-        if payload.password != stored_password:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid email or password.",
-            )
-
-        # ── 3. Generate JWT ───────────────────────────────
-        token = create_token(user_id=user_id, role=role)
-        logger.info("User logged in: user_id=%d role=%s", user_id, role)
-
-        return LoginResponse(
-            access_token=token,
-            user_id=user_id,
-            role=role,
-        )
+        return LoginResponse(access_token=token, user_id=row.user_id, role=row.role)
 
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("Login error: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Login failed. Please try again.",
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Login failed.")
     finally:
         conn.close()
