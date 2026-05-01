@@ -190,38 +190,26 @@ def end_session(payload: EndSessionRequest):
                 session_id, user_id,
                 emotional_score, functional_score, context_score,
                 isolation_score, critical_score,
-                final_score, risk_class,
-                user_role, performance_score,
-                eeg_stress_index, eeg_alpha_power, eeg_theta_power,
-                hr_mean, bp_avg_systolic, bp_avg_diastolic, pulse_avg,
-                dominant_emotion, emotion_distress_score,
-                recommendation, confidence, calculated_at
+                eeg_avg, avg_pulse, avg_bp_systolic,
+                dominant_emotion, final_score, risk_class,
+                calculated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload.session_id,
-                payload.user_id,                          # NOT NULL
+                payload.user_id,
                 components["emotional_score"],
                 components["functional_score"],
                 components["context_score"],
                 components["isolation_score"],
                 components["critical_score"],
-                final_score,                              # NOT NULL
-                risk_class,                               # risk_class NOT NULL (CHECK constrained)
-                role,                                     # user_role
-                components["performance_score"],
                 components["eeg_stress_index"],
-                components["eeg_alpha_power"],
-                components["eeg_theta_power"],
-                components["hr_mean"],
-                components["bp_avg_systolic"],
-                components["bp_avg_diastolic"],
                 components["pulse_avg"],
+                components["bp_avg_systolic"],
                 components["dominant_emotion"],
-                components["emotion_distress_score"],
-                recommendation,                           # recommendation (nullable)
-                confidence,
+                final_score,
+                risk_class,
                 calculated_at,
             ),
         )

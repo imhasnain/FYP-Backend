@@ -53,9 +53,9 @@ def get_user_history(user_id: int):
                 s.session_id,
                 s.start_time,
                 s.end_time,
-                r.recommendation,
+                r.risk_class as recommendation,
                 r.final_score,
-                r.confidence,
+                0.0 as confidence,
                 r.calculated_at
             FROM Sessions s
             INNER JOIN MH_Results r ON s.session_id = r.session_id
@@ -121,23 +121,24 @@ def get_all_results(
                 r.result_id,
                 r.session_id,
                 s.user_id,
-                r.user_role,
-                r.recommendation,
+                u.role as user_role,
+                r.risk_class as recommendation,
                 r.final_score,
-                r.confidence,
+                0.0 as confidence,
                 r.calculated_at
             FROM MH_Results r
             INNER JOIN Sessions s ON r.session_id = s.session_id
+            INNER JOIN Users u ON s.user_id = u.user_id
             WHERE 1=1
         """
         params = [limit]
 
         if role:
-            query += " AND r.user_role = ?"
+            query += " AND u.role = ?"
             params.append(role)
 
         if recommendation:
-            query += " AND r.recommendation = ?"
+            query += " AND r.risk_class = ?"
             params.append(recommendation)
 
         query += " ORDER BY r.calculated_at DESC"
@@ -190,27 +191,28 @@ def get_session_result(session_id: int):
             SELECT
                 r.session_id,
                 s.user_id,
-                r.user_role,
+                u.role as user_role,
                 r.emotional_score,
                 r.functional_score,
                 r.context_score,
                 r.isolation_score,
                 r.critical_score,
-                r.eeg_stress_index,
-                r.hr_mean,
-                r.bp_avg_systolic,
-                r.bp_avg_diastolic,
-                r.pulse_avg,
+                r.eeg_avg as eeg_stress_index,
+                r.avg_pulse as hr_mean,
+                r.avg_bp_systolic as bp_avg_systolic,
+                NULL as bp_avg_diastolic,
+                r.avg_pulse as pulse_avg,
                 r.dominant_emotion,
-                r.emotion_distress_score,
+                0.0 as emotion_distress_score,
                 r.final_score,
-                r.recommendation,
-                r.confidence,
+                r.risk_class as recommendation,
+                0.0 as confidence,
                 r.calculated_at,
                 s.start_time,
                 s.end_time
             FROM MH_Results r
             INNER JOIN Sessions s ON r.session_id = s.session_id
+            INNER JOIN Users u ON s.user_id = u.user_id
             WHERE r.session_id = ?
             """,
             (session_id,),

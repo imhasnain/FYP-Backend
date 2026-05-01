@@ -231,11 +231,11 @@ def analyze_emotion(payload: EmotionRequest):
         cursor.execute(
             """
             INSERT INTO EmotionImages
-                (user_id, session_id, image_name, captured_at)
+                (user_id, session_id, stage_number, image_name, captured_at)
             OUTPUT INSERTED.image_id
-            VALUES (?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (payload.user_id, payload.session_id, image_name, captured_at),
+            (payload.user_id, payload.session_id, payload.stage_number, image_name, captured_at),
         )
         row = cursor.fetchone()
         if row:
@@ -246,29 +246,89 @@ def analyze_emotion(payload: EmotionRequest):
         logger.warning("EmotionImages insert failed: %s", exc)
         # Continue — we can still do emotion analysis
 
-    # ── 4. Run DeepFace analysis ──────────────────────────
+    # ── 4. Try Custom Model first, fallback to DeepFace ───────────
     dominant_emotion = "undetected"
     emotion_scores = {}
     confidence = 0.0
 
-    try:
-        analysis = DeepFace.analyze(
-            img_path=frame,
-            actions=["emotion"],
-            enforce_detection=False,
-            silent=True,
-        )
-        result = analysis[0] if isinstance(analysis, list) else analysis
-
-        dominant_emotion = result.get("dominant_emotion", "undetected")
-        emotion_scores = result.get("emotion", {})
-        confidence = emotion_scores.get(dominant_emotion, 0.0)
-
-    except Exception as exc:
-        logger.warning("DeepFace analysis failed: %s", exc)
-        dominant_emotion = "undetected"
-        confidence = 0.0
-        emotion_scores = {}
+    # Check if user has trained their own custom model
+    custom_model_path = os.path.join(settings.BASE_DIR, "ml", "saved_models", "custom_emotion_model.h5")
+    
+    if os.path.exists(custom_model_path):
+        try:
+            import tensorflow as tf
+            # Load custom model lazily to avoid heavy import on startup
+            custom_model = tf.keras.models.load_model(custom_model_path)
+            
+            # Use OpenCV Haar Cascade to find the face
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+            
+            if len(faces) > 0:
+                # Take the largest detected face
+                faces = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)
+                (x, y, w, h) = faces[0]
+                
+                # Expand bounding box slightly (often helps FER2013 models)
+                pad_w = int(w * 0.1)
+                pad_h = int(h * 0.1)
+                x1 = max(0, x - pad_w)
+                y1 = max(0, y - pad_h)
+                x2 = min(gray.shape[1], x + w + pad_w)
+                y2 = min(gray.shape[0], y + h + pad_h)
+                
+                roi_gray = gray[y1:y2, x1:x2]
+                roi_gray = cv2.resize(roi_gray, (48, 48))
+                roi_gray = roi_gray.astype('float') / 255.0
+                roi_gray = np.expand_dims(roi_gray, axis=0)
+                roi_gray = np.expand_dims(roi_gray, axis=-1)
+                
+                # Predict
+                preds = custom_model.predict(roi_gray)[0]
+                
+                # Hardcoded list from the training script
+                EMOTIONS = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
+                
+                for i, prob in enumerate(preds):
+                    emotion_scores[EMOTIONS[i]] = float(prob * 100.0)
+                    
+                confidence = float(np.max(preds) * 100.0)
+                
+                # Fallback to DeepFace if the custom model isn't very confident
+                if confidence > 55.0:
+                    dominant_emotion = EMOTIONS[np.argmax(preds)]
+                    logger.info("Used Custom Emotion Model: %s (%.1f%%)", dominant_emotion, confidence)
+                else:
+                    logger.info("Custom model confidence low (%.1f%%). Falling back to DeepFace.", confidence)
+                    dominant_emotion = "undetected" # Triggers fallback
+            else:
+                raise ValueError("No face detected by Haar Cascade")
+                
+        except Exception as exc:
+            logger.warning("Custom model prediction failed: %s. Falling back to DeepFace.", exc)
+            # Proceed to DeepFace fallback below
+    
+    # If custom model didn't run or failed, use DeepFace
+    if dominant_emotion == "undetected":
+        try:
+            analysis = DeepFace.analyze(
+                img_path=frame,
+                actions=["emotion"],
+                enforce_detection=False,
+                silent=True,
+            )
+            result = analysis[0] if isinstance(analysis, list) else analysis
+    
+            dominant_emotion = result.get("dominant_emotion", "undetected")
+            emotion_scores = result.get("emotion", {})
+            confidence = emotion_scores.get(dominant_emotion, 0.0)
+    
+        except Exception as exc:
+            logger.error("DeepFace analysis failed for session %d stage %d: %s", payload.session_id, payload.stage_number, exc)
+            dominant_emotion = "undetected"
+            confidence = 0.0
+            emotion_scores = {}
 
     # ── 5. Insert into FacialEmotions table ───────────────
     try:
@@ -282,8 +342,8 @@ def analyze_emotion(payload: EmotionRequest):
             INSERT INTO FacialEmotions
                 (session_id, dominant_emotion,
                  happy, sad, angry, fear, surprise, disgust, neutral,
-                 captured_at, image_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 captured_at, image_id, stage_number)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload.session_id,
@@ -297,6 +357,7 @@ def analyze_emotion(payload: EmotionRequest):
                 scores.get("neutral", 0.0),
                 captured_at,
                 image_id,
+                payload.stage_number,
             ),
         )
         conn.commit()

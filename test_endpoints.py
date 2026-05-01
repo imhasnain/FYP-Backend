@@ -141,39 +141,18 @@ def run_tests():
 
     print()
 
-    # Unique email to avoid conflicts on repeat runs
-    test_email = f"test_student_{int(time.time())}@clinic.edu"
+    # Pre-seeded test credentials
+    test_email = "student@clinic.edu"
     user_id = None
     token = None
     session_id = None
 
-    # ── 1. Register student ──────────────────────────────────
-    print("Step 1: Register Student")
-    try:
-        r = requests.post(f"{BASE_URL}/auth/register", json={
-            "name": "Test Student",
-            "email": test_email,
-            "password": "test123456",
-            "role": "student",
-        }, timeout=10)
-        if r.status_code in (200, 201):
-            data = r.json()
-            user_id = data.get("user_id")
-            _log("Register Student", True, {"user_id": user_id, "email": test_email})
-        else:
-            _log("Register Student", False, error=f"HTTP {r.status_code}: {r.text[:300]}")
-            print("\n[ABORT] Cannot continue without a registered user.")
-            sys.exit(1)
-    except Exception as exc:
-        _log("Register Student", False, error=str(exc))
-        sys.exit(1)
-
-    # ── 2. Login ─────────────────────────────────────────────
-    print("\nStep 2: Login")
+    # ── 1. Login ─────────────────────────────────────────────
+    print("\nStep 1: Login")
     try:
         r = requests.post(f"{BASE_URL}/auth/login", json={
             "email": test_email,
-            "password": "test123456",
+            "password": "password123",
         }, timeout=10)
         if r.status_code == 200:
             data = r.json()

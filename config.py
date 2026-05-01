@@ -36,8 +36,9 @@ class Settings(BaseSettings):
 
     # ── Facial Emotion Detection ───────────────────────────
     EMOTION_INTERVAL_SECONDS: int = 5    # Capture emotion every N seconds
+    BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
     EMOTION_IMAGES_DIR: str = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "emotion_images"
+        BASE_DIR, "emotion_images"
     )
 
     model_config = SettingsConfigDict(

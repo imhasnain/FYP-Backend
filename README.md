@@ -182,5 +182,6 @@ backend/
    - BP cuff readings → `POST /sensors/bp` (Calculates baseline/delta if applicable)
    - EEG via WebSocket → `WS /ws/eeg/{session_id}` (Auto-starts `muselsl` if needed)
 4. User completes questionnaire stages 1–5
+   - **Dynamic Emotion Mapping**: Each submitted question is precisely timestamp-matched with the closest 5-second webcam frame. If the user's face shows distress (e.g. Fear/Angry) while answering a specific question, that question's risk score is dynamically multiplied!
 5. App ends session → backend runs full ML pipeline → returns recommendation
 6. Result displayed with confidence and score breakdown

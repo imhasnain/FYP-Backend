@@ -201,7 +201,7 @@ def run_migrations():
             conn.rollback()
             print(f"  [FAIL] EmotionImages table -- FAILED: {exc}")
 
-    # ── 6. FacialEmotions — add image_id ─────────────────────
+    # ── 6. FacialEmotions & EmotionImages — add columns ────────────────
     if _table_exists(cursor, "FacialEmotions"):
         if not _column_exists(cursor, "FacialEmotions", "image_id"):
             try:
@@ -211,6 +211,72 @@ def run_migrations():
             except pyodbc.Error as exc:
                 conn.rollback()
                 print(f"  [FAIL] FacialEmotions.image_id -- FAILED: {exc}")
+                
+        if not _column_exists(cursor, "FacialEmotions", "stage_number"):
+            try:
+                cursor.execute("ALTER TABLE FacialEmotions ADD stage_number INT NULL")
+                conn.commit()
+                print(f"  [OK]   FacialEmotions.stage_number -- added successfully.")
+            except pyodbc.Error as exc:
+                conn.rollback()
+                print(f"  [FAIL] FacialEmotions.stage_number -- FAILED: {exc}")
+                
+    if _table_exists(cursor, "EmotionImages"):
+        if not _column_exists(cursor, "EmotionImages", "stage_number"):
+            try:
+                cursor.execute("ALTER TABLE EmotionImages ADD stage_number INT NULL")
+                conn.commit()
+                print(f"  [OK]   EmotionImages.stage_number -- added successfully.")
+            except pyodbc.Error as exc:
+                conn.rollback()
+                print(f"  [FAIL] EmotionImages.stage_number -- FAILED: {exc}")
+
+    # ── 7. Seed Demo Users ───────────────────────────────────
+    cursor.execute("SELECT 1 FROM Users WHERE email = 'student@clinic.edu'")
+    if cursor.fetchone():
+        print("  [OK]   Demo Student -- already exists, skipping.")
+    else:
+        try:
+            cursor.execute(
+                """
+                INSERT INTO Users (name, email, password, role)
+                OUTPUT INSERTED.user_id
+                VALUES ('Demo Student', 'student@clinic.edu', 'password123', 'student')
+                """
+            )
+            student_id = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO Students (user_id, cgpa_trend, attendance_drop) VALUES (?, -0.2, 5.0)",
+                (student_id,)
+            )
+            conn.commit()
+            print("  [OK]   Demo Student -- created successfully.")
+        except pyodbc.Error as exc:
+            conn.rollback()
+            print(f"  [FAIL] Demo Student -- FAILED: {exc}")
+
+    cursor.execute("SELECT 1 FROM Users WHERE email = 'teacher@clinic.edu'")
+    if cursor.fetchone():
+        print("  [OK]   Demo Teacher -- already exists, skipping.")
+    else:
+        try:
+            cursor.execute(
+                """
+                INSERT INTO Users (name, email, password, role)
+                OUTPUT INSERTED.user_id
+                VALUES ('Demo Teacher', 'teacher@clinic.edu', 'password123', 'teacher')
+                """
+            )
+            teacher_id = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO Teachers (user_id, workload_hrs, class_count) VALUES (?, 24.5, 4)",
+                (teacher_id,)
+            )
+            conn.commit()
+            print("  [OK]   Demo Teacher -- created successfully.")
+        except pyodbc.Error as exc:
+            conn.rollback()
+            print(f"  [FAIL] Demo Teacher -- FAILED: {exc}")
 
     conn.close()
 

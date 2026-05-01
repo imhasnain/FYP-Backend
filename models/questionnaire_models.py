@@ -10,7 +10,7 @@ class QuestionnaireAnswer(BaseModel):
     """A single question-answer pair submitted by the patient."""
 
     question_id: int
-    response_choice: str   # e.g. 'Never', 'Sometimes', 'Always'
+    response_choice: str | int   # e.g. 'Never', 'Sometimes', 'Always' or 0-4
     cal_score: float       # Weighted score calculated on the client side
 
 

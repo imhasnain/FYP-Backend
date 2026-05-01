@@ -14,8 +14,8 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 # Maximum number of connection attempts before giving up
-MAX_RETRIES = 3
-RETRY_DELAY_SECONDS = 2
+MAX_RETRIES = 5
+RETRY_DELAY_SECONDS = 1
 
 
 def _build_conn_str() -> str:
@@ -63,7 +63,7 @@ def get_connection() -> pyodbc.Connection:
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            conn = pyodbc.connect(conn_str, timeout=10)
+            conn = pyodbc.connect(conn_str, timeout=5)
             conn.autocommit = False
             if attempt > 1:
                 logger.info("Database connection succeeded on attempt %d.", attempt)

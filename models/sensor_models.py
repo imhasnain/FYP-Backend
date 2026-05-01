@@ -56,6 +56,7 @@ class EmotionRequest(BaseModel):
 
     session_id: int
     user_id: int
+    stage_number: int = 1
     image_base64: str
 
 

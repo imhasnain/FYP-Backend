@@ -1,7 +1,8 @@
-@"
 venv/
 __pycache__/
 *.pyc
 .env
 .DS_Store
-"@ | Out-File -FilePath .gitignore -Encoding utf8
+frontend/
+emotion_images/
+ml/dataset/

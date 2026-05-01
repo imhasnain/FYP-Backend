@@ -31,7 +31,7 @@ BEGIN
         user_id     INT IDENTITY(1,1) PRIMARY KEY,
         name        VARCHAR(100)  NOT NULL,
         email       VARCHAR(100)  NOT NULL UNIQUE,
-        password    VARCHAR(255)  NOT NULL,   -- bcrypt hash
+        password    VARCHAR(255)  NOT NULL,   -- plaintext password
         role        VARCHAR(20)   NOT NULL    -- 'student' | 'teacher' | 'psychologist'
                     CHECK (role IN ('student', 'teacher', 'psychologist')),
         created_at  DATETIME      NOT NULL DEFAULT GETDATE()
@@ -263,5 +263,43 @@ BEGIN
 END
 GO
 
+-- ============================================================
+-- SEED DATA: Pre-registered Users
+-- ============================================================
+IF NOT EXISTS (SELECT 1 FROM Users WHERE email = 'student@clinic.edu')
+BEGIN
+    -- Base User (Student)
+    -- password is 'password123' (plaintext)
+    INSERT INTO Users (name, email, password, role)
+    VALUES ('Demo Student', 'student@clinic.edu', 'password123', 'student');
+    
+    DECLARE @student_user_id INT = SCOPE_IDENTITY();
+    
+    -- Extended Student Data
+    INSERT INTO Students (user_id, cgpa_trend, attendance_drop)
+    VALUES (@student_user_id, -0.2, 5.0);
+    
+    PRINT 'Student seed data inserted.';
+END
+GO
+
+IF NOT EXISTS (SELECT 1 FROM Users WHERE email = 'teacher@clinic.edu')
+BEGIN
+    -- Base User (Teacher)
+    -- password is 'password123' (plaintext)
+    INSERT INTO Users (name, email, password, role)
+    VALUES ('Demo Teacher', 'teacher@clinic.edu', 'password123', 'teacher');
+    
+    DECLARE @teacher_user_id INT = SCOPE_IDENTITY();
+    
+    -- Extended Teacher Data
+    INSERT INTO Teachers (user_id, workload_hrs, class_count)
+    VALUES (@teacher_user_id, 24.5, 4);
+    
+    PRINT 'Teacher seed data inserted.';
+END
+GO
+
 PRINT '=== VirtualClinicDB schema created successfully ===';
 GO
+

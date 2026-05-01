@@ -62,7 +62,7 @@ def submit_stage(payload: SubmitStageRequest):
                 payload.session_id,
                 answer.question_id,
                 payload.stage_number,
-                answer.response_choice,
+                str(answer.response_choice),
                 answer.cal_score,
                 now,
             )

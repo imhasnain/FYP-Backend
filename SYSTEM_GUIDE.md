@@ -573,6 +573,17 @@ EMOTION_DISTRESS_MAP:
 
 ## 12. Scoring Formulas
 
+### Dynamic Emotion Timestamp Mapping
+A core feature of the multimodal fusion logic is mapping the 5-second facial emotion frames directly to the exact timestamp of a questionnaire response.
+
+When a user submits an answer, the `questionnaire_scorer` finds the closest camera frame captured within 60 seconds. The base score for that question is multiplied by an emotional distress factor:
+- **Angry**: 1.5x risk penalty
+- **Fear / Sad**: 1.4x penalty
+- **Neutral**: 1.0x (no change)
+- **Happy**: 0.7x (reduces risk)
+
+This allows the ML model to flag clinical contradictions (e.g., clicking "I'm fine" but displaying "Fear" raises the risk score for that specific question).
+
 ### Stage Normalization
 ```
 normalized = (raw_sum / (num_questions * 4)) * 4

@@ -7,6 +7,9 @@
 
 import logging
 from typing import Dict, Optional
+from datetime import datetime
+
+from preprocessing.emotion_preprocessor import EMOTION_DISTRESS_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,10 @@ def get_stage_scores(session_id: int, conn) -> Dict[int, Dict[str, float]]:
     """
     Fetch all questionnaire responses for a session and compute
     normalized scores per stage.
+    
+    NEW LOGIC: Maps the closest 5-second FacialEmotion frame to each
+    questionnaire response timestamp. Multiplies the base cal_score by
+    an emotion distress multiplier to dynamically weight the risk!
 
     Args:
         session_id: The session to query.
@@ -46,29 +53,71 @@ def get_stage_scores(session_id: int, conn) -> Dict[int, Dict[str, float]]:
         Missing stages will not have entries.
     """
     cursor = conn.cursor()
+    
+    # 1. Fetch all questionnaire responses for the session
     cursor.execute(
         """
-        SELECT stage_number,
-               SUM(cal_score)  AS raw_sum,
-               COUNT(*)        AS num_q
+        SELECT stage_number, cal_score, timestamp
         FROM Q_Responses
         WHERE session_id = ?
           AND stage_number IS NOT NULL
-        GROUP BY stage_number
-        ORDER BY stage_number
         """,
         (session_id,),
     )
-    rows = cursor.fetchall()
+    responses = cursor.fetchall()
+
+    # 2. Fetch all facial emotions for the session
+    cursor.execute(
+        """
+        SELECT dominant_emotion, captured_at
+        FROM FacialEmotions
+        WHERE session_id = ?
+          AND captured_at IS NOT NULL
+        """,
+        (session_id,),
+    )
+    emotions = cursor.fetchall()
+
+    stage_totals = {}
+    stage_counts = {}
+
+    for row in responses:
+        stage = int(row.stage_number)
+        base_score = float(row.cal_score or 0.0)
+        resp_time = row.timestamp
+        
+        multiplier = 1.0
+        
+        # 3. Find closest emotion frame to the exact moment the question was answered
+        if emotions and resp_time:
+            # Sort by absolute time difference
+            closest = min(emotions, key=lambda e: abs((e.captured_at - resp_time).total_seconds()))
+            diff_seconds = abs((closest.captured_at - resp_time).total_seconds())
+            
+            # Only apply multiplier if the closest frame is within a 60-second window
+            if diff_seconds <= 60:
+                dom_emotion = (closest.dominant_emotion or "undetected").lower()
+                distress = EMOTION_DISTRESS_MAP.get(dom_emotion, 0.3)
+                
+                # distress ranges from 0.0 to 0.8
+                # 0.3 (undetected/average) -> multiplier 1.0
+                # 0.8 (angry) -> multiplier 1.5
+                # 0.0 (happy) -> multiplier 0.7
+                multiplier = 1.0 + (distress - 0.3)
+        
+        adjusted_score = base_score * multiplier
+        # Cap at maximum possible cal_score for one question (4.0)
+        adjusted_score = min(4.0, adjusted_score)
+        
+        stage_totals[stage] = stage_totals.get(stage, 0.0) + adjusted_score
+        stage_counts[stage] = stage_counts.get(stage, 0) + 1
 
     scores = {}
-    for row in rows:
-        stage = int(row.stage_number)
-        raw = float(row.raw_sum or 0.0)
-        num_q = int(row.num_q or 0)
-        norm = _normalize_stage(raw, num_q)
+    for stage, raw_sum in stage_totals.items():
+        num_q = stage_counts[stage]
+        norm = _normalize_stage(raw_sum, num_q)
         scores[stage] = {
-            "raw_sum": raw,
+            "raw_sum": round(raw_sum, 4),
             "num_questions": num_q,
             "normalized": round(norm, 4),
         }
