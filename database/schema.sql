@@ -218,11 +218,11 @@ GO
 IF NOT EXISTS (SELECT 1 FROM Q_Stages)
 BEGIN
     INSERT INTO Q_Stages (stage_number, stage_name, target_role, threshold) VALUES
-    (1, 'Emotional Wellbeing Assessment',   'both',    2.0),
-    (2, 'Functional Impairment Screening',  'both',    1.5),
-    (3, 'Contextual Stressor Evaluation',   'both',    1.0),
-    (4, 'Social Isolation & Support Check', 'both',    1.5),
-    (5, 'Critical Risk Indicators',         'both',    0.5);
+    (1, 'Emotional State Screening',  'both',  8.0),
+    (2, 'Functional Impact',          'both',  8.0),
+    (3, 'Contextual Mental Strain',   'both',  8.0),
+    (4, 'Psychological Risk',         'both',  8.0),
+    (5, 'Critical Risk Screening',    'both',  5.0);
     PRINT 'Q_Stages seed data inserted.';
 END
 GO
@@ -232,32 +232,66 @@ GO
 -- ============================================================
 IF NOT EXISTS (SELECT 1 FROM Q_Questions)
 BEGIN
-    -- Stage 1: Emotional Wellbeing (stage_id = 1)
+    -- Stage 1: Emotional State Screening (stage_id = 1)
     INSERT INTO Q_Questions (stage_id, question_text, weight) VALUES
-    (1, 'Over the last two weeks, how often have you felt down, depressed, or hopeless?', 1.0),
-    (1, 'How often have you had little interest or pleasure in doing things?', 1.0),
-    (1, 'How often do you feel nervous, anxious, or on edge?', 1.0),
-    (1, 'How often do you feel unable to control worrying?', 1.0),
+    (1, 'How often do you feel nervous or worried?', 1.0),
+    (1, 'How often do you feel sad or down?', 1.0),
+    (1, 'How often do everyday tasks feel like too much?', 1.0),
+    (1, 'How often do you feel restless or unable to relax?', 1.0),
+    (1, 'How often do you feel emotionally worn out?', 1.0),
+    (1, 'How often do you worry too much about your responsibilities?', 1.0),
+    (1, 'How often do you feel irritable for no clear reason?', 1.0),
+    (1, 'How often do you feel like you have no energy to start things?', 1.0),
+    (1, 'How often does your mind feel tired or foggy?', 1.0),
+    (1, 'How often do you feel scared without knowing why?', 1.0),
 
-    -- Stage 2: Functional Impairment (stage_id = 2)
-    (2, 'How often have these feelings made it difficult to do your work or studies?', 1.0),
-    (2, 'How often have they affected your ability to take care of daily responsibilities?', 1.0),
-    (2, 'How much have these problems affected your sleep quality?', 1.0),
+    -- Stage 2: Functional Impact (stage_id = 2)
+    (2, 'How often does stress make it hard to focus?', 1.0),
+    (2, 'How often does stress make you forgetful?', 1.0),
+    (2, 'How often do you have trouble sleeping?', 1.0),
+    (2, 'How often do you wake up feeling tired?', 1.0),
+    (2, 'How often has your eating changed because of stress?', 1.0),
+    (2, 'How often have you lost interest in your work or studies?', 1.0),
+    (2, 'How often do you feel mentally drained by the end of the day?', 1.0),
+    (2, 'How often do you put off tasks because they feel stressful?', 1.0),
+    (2, 'How often has your performance at work or school dropped?', 1.0),
+    (2, 'How often does stress cause you to avoid people or social situations?', 1.0),
 
-    -- Stage 3: Contextual Stressors (stage_id = 3)
-    (3, 'Are you currently under significant academic or work pressure?', 1.0),
-    (3, 'Have you experienced any major life events recently (loss, conflict, etc.)?', 1.0),
-    (3, 'Do you feel your current environment is stressful or unsupportive?', 1.0),
+    -- Stage 3: Contextual Mental Strain (stage_id = 3)
+    (3, 'How often do deadlines make you anxious?', 1.0),
+    (3, 'How often do heavy workloads or long study hours drain you?', 1.0),
+    (3, 'How often do exams, evaluations, or performance reviews cause you stress?', 1.0),
+    (3, 'How often do you feel pressure from family or institution expectations?', 1.0),
+    (3, 'How often do you feel unsupported by peers, managers, or teachers?', 1.0),
+    (3, 'How often does comparing yourself to others stress you?', 1.0),
+    (3, 'How often do money or job-security concerns affect your peace of mind?', 1.0),
+    (3, 'How often do you struggle to balance work/study and personal life?', 1.0),
+    (3, 'How often do strict rules, attendance, or schedules make you feel anxious?', 1.0),
+    (3, 'How often do you feel your efforts are ignored or not valued?', 1.0),
 
-    -- Stage 4: Social Isolation (stage_id = 4)
-    (4, 'How often do you feel lonely or isolated from others?', 1.0),
-    (4, 'Do you have people you can turn to when feeling stressed?', 1.0),
-    (4, 'How often do you withdraw from social activities you used to enjoy?', 1.0),
+    -- Stage 4: Psychological Risk (stage_id = 4)
+    (4, 'How often do you feel cut off from people around you?', 1.0),
+    (4, 'How often do you feel hopeless about your future?', 1.0),
+    (4, 'How often do you feel worthless?', 1.0),
+    (4, 'How often do you feel emotionally numb or empty?', 1.0),
+    (4, 'How often do you feel your problems are too big to handle?', 1.0),
+    (4, 'How often do your emotions change quickly and without warning?', 1.0),
+    (4, 'How often do you get frustrated very easily?', 1.0),
+    (4, 'How often do you feel like giving up on your daily duties?', 1.0),
+    (4, 'How often do you avoid meeting or talking to others?', 1.0),
+    (4, 'How often do you feel like your life has no purpose?', 1.0),
 
-    -- Stage 5: Critical Indicators (stage_id = 5)
-    (5, 'Have you had thoughts that you would be better off dead or of hurting yourself?', 2.0),
-    (5, 'Have you had thoughts of harming others?', 2.0),
-    (5, 'Do you feel completely hopeless about the future?', 1.5);
+    -- Stage 5: Critical Risk Screening (stage_id = 5)
+    (5, 'Have you had thoughts of hurting yourself?', 2.0),
+    (5, 'Have you felt that life is not worth living?', 2.0),
+    (5, 'Have you wished you could just disappear?', 2.0),
+    (5, 'Have you stopped doing things you used to enjoy?', 1.0),
+    (5, 'Have you felt completely trapped in your situation?', 1.5),
+    (5, 'Have you felt like a burden to others?', 1.5),
+    (5, 'Have you lost interest in taking care of your health or safety?', 1.5),
+    (5, 'Have you felt that no one would understand what you are going through?', 1.0),
+    (5, 'Have you thought about ending your life, even if you would not act on it?', 2.0),
+    (5, 'Have you felt that things will never get better no matter what you do?', 1.5);
 
     PRINT 'Q_Questions seed data inserted.';
 END
