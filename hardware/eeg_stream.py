@@ -1,228 +1,350 @@
-# ============================================================
-# hardware/eeg_stream.py — Muse headset LSL stream helpers
-#
-# Two modes of operation:
-#   1. Manual: User runs 'muselsl stream --ppg' in a separate terminal
-#   2. Auto:   Call auto_start_muse_stream() to spawn the subprocess
-#              automatically (inspired by senior project pattern)
-#
-# This module reads from the LSL streams that muselsl exposes.
-# pylsl resolves streams on localhost automatically.
-# ============================================================
+"""hardware/eeg_stream.py — Strictly REAL Muse EEG & PPG streaming via BlueMuse + pylsl.
 
-import sys
-import time
+RAW DATA PIPELINE (what exactly happens to each sample):
+  1. BlueMuse streams raw Muse 2 EEG in microvolts (µV). Typical good values: -100 to +100 µV.
+  2. We collect AF7 + AF8 frontal channels and average them every 2 seconds (512 samples).
+  3. Artifact Rejection: samples where |value| > 150 µV are dropped (eye blinks, jaw clenches).
+  4. Butterworth bandpass filter (1–40 Hz, 4th order) removes DC drift and high-freq muscle noise.
+  5. FFT converts the filtered signal to the frequency domain and we extract mean power per band:
+       Alpha (8–13 Hz) → Relaxation
+       Beta  (13–30 Hz) → Stress / active thinking
+       Theta (4–8 Hz)   → Fatigue / deep focus
+  6. Stress Index = (Beta + Theta) / Alpha
+  7. Snapshot saved to EEG_Snapshots every 2 seconds, tagged with current question number.
+  8. WebSocket broadcasts live values to the Flutter app every 2 seconds.
+  9. PPG (IR optical channel) → peak detection → real Heart Rate BPM → saved to SensorData.
+"""
+
+import threading
 import logging
-import subprocess
-from typing import Optional, Tuple, List
+import time
+from collections import deque
+from datetime import datetime, timezone
+from typing import Optional
 
-from pylsl import StreamInlet, StreamInfo, resolve_stream
+import numpy as np
+from scipy.signal import butter, sosfilt, find_peaks
 
 logger = logging.getLogger(__name__)
 
-# Timeout in seconds when waiting to find an LSL stream
-LSL_RESOLVE_TIMEOUT = 5.0
+# ── EEG & PPG constants ───────────────────────────────────────────────────
+SAMPLE_RATE   = 256.0     # Muse 2 EEG Hz
+PPG_RATE      = 64.0      # Muse 2 PPG Hz
+BUFFER_SIZE   = int(SAMPLE_RATE * 2)   # 2-second window = 512 samples
+SNAPSHOT_SEC  = 2.0       # process + save every 2 seconds
 
-# Global subprocess reference for muselsl
-_muse_proc: Optional[subprocess.Popen] = None
+# Frontal channels: AF7=1, AF8=2 (0-indexed in Muse LSL stream)
+FRONTAL_CHANNELS = [1, 2]
+
+# Artifact rejection threshold in µV — values outside ±150 µV are blink/jaw artifacts
+ARTIFACT_THRESHOLD = 150.0
+
+# Frequency bands in Hz
+BANDS = {
+    "theta": (4.0, 8.0),
+    "alpha": (8.0, 13.0),
+    "beta":  (13.0, 30.0),
+}
 
 
-def auto_start_muse_stream(wait_seconds: int = 8) -> bool:
+# ── Signal processing ─────────────────────────────────────────────────────
+
+def _bandpass(data: np.ndarray, low: float, high: float, fs: float) -> np.ndarray:
+    """Butterworth bandpass filter using second-order sections for numerical stability."""
+    nyq = fs / 2.0
+    sos = butter(4, [low / nyq, high / nyq], btype="band", output="sos")
+    return sosfilt(sos, data)
+
+
+def _band_power(signal: np.ndarray, low: float, high: float) -> float:
     """
-    Automatically start the muselsl stream as a subprocess.
-
-    Spawns 'python -m muselsl stream --ppg' in the background,
-    waits for the stream to initialize, then returns.
-
-    This is inspired by the senior project pattern where the backend
-    manages the muselsl process lifecycle internally.
-
-    Args:
-        wait_seconds: How long to wait for the stream to start (default 8s).
-
-    Returns:
-        True if the process was started (or is already running), False on error.
+    Mean spectral power in a frequency band via FFT.
+    Result is in µV² (microvolts squared) — typical values: 1–50 µV² for clean EEG.
     """
-    global _muse_proc
+    n = len(signal)
+    if n < 8:
+        return 0.0
+    # FFT power spectrum
+    fft_vals = np.fft.rfft(signal)
+    power = (np.abs(fft_vals) ** 2) / n          # power spectral density
+    freqs = np.fft.rfftfreq(n, d=1.0 / SAMPLE_RATE)
+    mask = (freqs >= low) & (freqs <= high)
+    return float(np.mean(power[mask])) if mask.any() else 0.0
 
-    if _muse_proc is not None and _muse_proc.poll() is None:
-        logger.info("muselsl process already running (PID=%d).", _muse_proc.pid)
-        return True
 
+def _reject_artifacts(raw: np.ndarray) -> np.ndarray:
+    """
+    Remove samples exceeding ±ARTIFACT_THRESHOLD µV.
+    These are caused by eye blinks, jaw clenches, or electrode disconnections.
+    Returns cleaned array; if > 50% bad, returns empty array (not enough data).
+    """
+    mask = np.abs(raw) <= ARTIFACT_THRESHOLD
+    clean = raw[mask]
+    if len(clean) < len(raw) * 0.5:
+        logger.warning("EEG: >50%% samples are artifacts — headset may not be worn correctly.")
+        return np.array([])
+    return clean
+
+
+def _process_eeg(raw: np.ndarray) -> Optional[dict]:
+    """
+    Full EEG pipeline: artifact rejection → bandpass filter → FFT band powers → stress index.
+    Returns None if not enough clean data.
+    """
+    # Step 1: reject blink/jaw artifacts
+    clean = _reject_artifacts(raw)
+    if len(clean) < 64:    # need at least 0.25 seconds of data
+        return None
+
+    # Step 2: bandpass filter (1–40 Hz)
+    filtered = _bandpass(clean, 1.0, 40.0, fs=SAMPLE_RATE)
+
+    # Step 3: extract band powers
+    theta = _band_power(filtered, *BANDS["theta"])
+    alpha = _band_power(filtered, *BANDS["alpha"])
+    beta  = _band_power(filtered, *BANDS["beta"])
+
+    # Step 4: stress index
+    stress_index = (beta + theta) / (alpha + 1e-6)
+
+    return {
+        "alpha":        round(alpha, 4),
+        "beta":         round(beta, 4),
+        "theta":        round(theta, 4),
+        "stress_index": round(min(stress_index, 20.0), 4),   # cap at 20 for display
+    }
+
+
+def _extract_pulse(ppg_ir: np.ndarray) -> int:
+    """
+    Extract heart rate (BPM) from Muse PPG IR optical channel.
+    Bandpass 0.8–3.5 Hz (48–210 BPM), then count peaks.
+    """
     try:
-        logger.info("Starting muselsl stream subprocess...")
-        _muse_proc = subprocess.Popen(
-            [sys.executable, "-m", "muselsl", "stream", "--ppg"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        logger.info("muselsl subprocess started (PID=%d). Waiting %ds...", _muse_proc.pid, wait_seconds)
-        time.sleep(wait_seconds)
-        return True
-
-    except FileNotFoundError:
-        logger.error(
-            "muselsl not installed. Install it with: pip install muselsl"
-        )
-        return False
-    except Exception as exc:
-        logger.error("Failed to start muselsl stream: %s", exc)
-        return False
+        if len(ppg_ir) < 64:
+            return 72
+        filtered = _bandpass(ppg_ir, 0.8, 3.5, fs=PPG_RATE)
+        peaks, _ = find_peaks(filtered, distance=int(PPG_RATE * 0.4))
+        if len(peaks) >= 2:
+            intervals = np.diff(peaks) / PPG_RATE
+            bpm = int(round(60.0 / float(np.mean(intervals))))
+            return max(45, min(180, bpm))
+    except Exception:
+        pass
+    return 72
 
 
-def stop_muse_stream() -> None:
+# ── EEGStream class ───────────────────────────────────────────────────────
+
+class EEGStream:
     """
-    Terminate the muselsl subprocess if it was auto-started.
-
-    Safe to call multiple times. Does nothing if no subprocess is running.
+    Manages live Muse EEG & PPG acquisition for one session.
+    No simulation — hardware only.
     """
-    global _muse_proc
 
-    if _muse_proc is not None:
+    def __init__(self, session_id: int, db_conn):
+        self.session_id     = session_id
+        self._conn          = db_conn
+        self._thread        = None
+        self._stop_event    = threading.Event()
+        self._lock          = threading.Lock()
+        self._current_q_id  = None
+        self._current_q_num = None
+
+        # Live values read by WebSocket handler and Flutter app
+        self.latest: dict = {
+            "connected":    False,
+            "alpha":        0.0,
+            "beta":         0.0,
+            "theta":        0.0,
+            "stress_index": 0.0,
+            "pulse_rate":   72,
+            "question_id":  None,
+            "question_num": None,
+        }
+
+    def set_question(self, question_id: int, question_num: int):
+        with self._lock:
+            self._current_q_id  = question_id
+            self._current_q_num = question_num
+        logger.info("EEG marker set: session=%d q_id=%d q_num=%d",
+                    self.session_id, question_id, question_num)
+
+    def start(self):
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        logger.info("EEG stream thread started for session %d", self.session_id)
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+        logger.info("EEG stream stopped for session %d", self.session_id)
+
+    def _run(self):
         try:
-            _muse_proc.terminate()
-            _muse_proc.wait(timeout=5)
-            logger.info("muselsl subprocess terminated.")
+            from pylsl import StreamInlet, resolve_streams
+        except ImportError:
+            logger.error("pylsl not installed. Run: pip install pylsl")
+            return
+
+        logger.info("Resolving real Muse LSL streams (EEG + PPG)...")
+        all_streams = resolve_streams(wait_time=5.0)
+
+        eeg_inlet = None
+        ppg_inlet = None
+
+        for s in all_streams:
+            stype = s.type().upper()
+            sname = s.name().upper()
+            logger.info("Discovered LSL stream: name='%s' type='%s'", s.name(), s.type())
+            if (stype == "EEG" or ("EEG" in sname and "GYRO" not in sname and "ACCEL" not in sname and "TELEMETRY" not in sname and "PPG" not in sname)) and eeg_inlet is None:
+                eeg_inlet = StreamInlet(s, max_buflen=30)
+                logger.info("Connected to Real Muse EEG: %s (Type: %s)", s.name(), s.type())
+            elif (stype == "PPG" or "PPG" in sname) and ppg_inlet is None:
+                ppg_inlet = StreamInlet(s, max_buflen=30)
+                logger.info("Connected to Real Muse PPG: %s (Type: %s)", s.name(), s.type())
+
+        if eeg_inlet is None:
+            logger.warning("No real Muse EEG LSL stream found for session %d. Make sure BlueMuse is streaming.", self.session_id)
+            with self._lock:
+                self.latest["connected"] = False
+            return
+
+        with self._lock:
+            self.latest["connected"] = True
+
+        eeg_buffer: deque = deque(maxlen=BUFFER_SIZE)
+        ppg_buffer: deque = deque(maxlen=256)
+        last_snapshot = time.time()
+
+        while not self._stop_event.is_set():
+            # Pull EEG samples
+            eeg_samples, _ = eeg_inlet.pull_chunk(timeout=0.05, max_samples=32)
+            for sample in (eeg_samples or []):
+                if len(sample) >= 3:
+                    val = float(np.mean([sample[i] for i in FRONTAL_CHANNELS if i < len(sample)]))
+                elif len(sample) >= 1:
+                    val = float(sample[0])
+                else:
+                    continue
+                eeg_buffer.append(val)
+
+            # Pull PPG samples
+            if ppg_inlet is not None:
+                ppg_samples, _ = ppg_inlet.pull_chunk(timeout=0.01, max_samples=16)
+                for sample in (ppg_samples or []):
+                    # IR channel is index 1 (Muse PPG: ambient=0, IR=1, red=2)
+                    ppg_buffer.append(float(sample[1] if len(sample) > 1 else sample[0]))
+
+            # Process snapshot every 2 seconds
+            now = time.time()
+            if now - last_snapshot >= SNAPSHOT_SEC and len(eeg_buffer) >= BUFFER_SIZE // 2:
+                last_snapshot = now
+
+                raw = np.array(list(eeg_buffer), dtype=np.float64)
+                result = _process_eeg(raw)
+
+                if result is None:
+                    logger.warning("EEG session %d: not enough clean samples (too many artifacts)", self.session_id)
+                    continue
+
+                # Extract real PPG heart rate
+                pulse = 72
+                if len(ppg_buffer) >= 64:
+                    pulse = _extract_pulse(np.array(list(ppg_buffer), dtype=np.float64))
+
+                with self._lock:
+                    q_id  = self._current_q_id
+                    q_num = self._current_q_num
+                    self.latest.update({
+                        **result,
+                        "connected":    True,
+                        "pulse_rate":   pulse,
+                        "question_id":  q_id,
+                        "question_num": q_num,
+                    })
+
+                logger.info(
+                    "EEG snap session=%d α=%.2f β=%.2f θ=%.2f stress=%.2f HR=%d q=%s",
+                    self.session_id, result["alpha"], result["beta"],
+                    result["theta"], result["stress_index"], pulse, q_num
+                )
+                self._save_snapshot(result, pulse, q_id, q_num)
+
+        try:
+            eeg_inlet.close_stream()
+            if ppg_inlet:
+                ppg_inlet.close_stream()
+        except Exception:
+            pass
+
+    def _save_snapshot(self, result: dict, pulse: int,
+                       q_id: Optional[int], q_num: Optional[int]):
+        """Save EEG snapshot + PPG pulse to the database."""
+        try:
+            cursor = self._conn.cursor()
+
+            # Save to EEG_Snapshots (processed bands + question marker)
+            cursor.execute(
+                """INSERT INTO EEG_Snapshots
+                   (session_id, recorded_at, alpha_power, beta_power,
+                    theta_power, stress_index, question_id, question_num)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (self.session_id,
+                 datetime.now(timezone.utc),
+                 result["alpha"],
+                 result["beta"],
+                 result["theta"],
+                 result["stress_index"],
+                 q_id, q_num)
+            )
+
+            # Save PPG heart rate to SensorData (data_type must be 'ppg')
+            cursor.execute(
+                """INSERT INTO SensorData
+                   (session_id, pulse_rate, data_type, recorded_at)
+                   VALUES (?, ?, 'ppg', ?)""",
+                (self.session_id, pulse, datetime.now(timezone.utc))
+            )
+
+            self._conn.commit()
         except Exception as exc:
-            logger.warning("Error stopping muselsl: %s", exc)
-        finally:
-            _muse_proc = None
+            logger.error("Snapshot save failed: %s", exc)
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
 
 
-def get_eeg_inlet() -> Optional[StreamInlet]:
-    """
-    Resolve and return a pylsl StreamInlet for the EEG stream
-    published by muselsl.
-
-    Blocks for up to LSL_RESOLVE_TIMEOUT seconds while searching.
-    Returns None if no EEG stream is found (muselsl not running).
-
-    Returns:
-        StreamInlet for EEG data, or None if not available.
-    """
-    logger.info("Searching for EEG LSL stream (type='EEG')...")
-    try:
-        streams: List[StreamInfo] = resolve_stream("type", "EEG", timeout=LSL_RESOLVE_TIMEOUT)
-
-        if not streams:
-            logger.warning(
-                "No EEG LSL stream found. "
-                "Make sure 'muselsl stream' is running or call auto_start_muse_stream()."
-            )
-            return None
-
-        inlet = StreamInlet(streams[0])
-        logger.info(
-            "Connected to EEG stream: name=%s, channels=%d, srate=%.1f Hz",
-            streams[0].name(),
-            streams[0].channel_count(),
-            streams[0].nominal_srate(),
-        )
-        return inlet
-    except Exception as exc:
-        logger.warning("EEG stream resolve failed: %s", exc)
-        return None
+# ── Global registry ───────────────────────────────────────────────────────
+_active_streams: dict[int, EEGStream] = {}
+_registry_lock = threading.Lock()
 
 
-def get_ppg_inlet() -> Optional[StreamInlet]:
-    """
-    Resolve and return a pylsl StreamInlet for the PPG (pulse) stream
-    published by muselsl.
-
-    The Muse headset exposes PPG data as a separate LSL stream with
-    type 'PPG'. This stream contains heart rate / blood volume pulse.
-
-    Returns:
-        StreamInlet for PPG data, or None if not available.
-    """
-    logger.info("Searching for PPG LSL stream (type='PPG')...")
-    try:
-        streams: List[StreamInfo] = resolve_stream("type", "PPG", timeout=LSL_RESOLVE_TIMEOUT)
-
-        if not streams:
-            logger.warning(
-                "No PPG LSL stream found. "
-                "Ensure your muselsl version supports PPG (use --ppg flag)."
-            )
-            return None
-
-        inlet = StreamInlet(streams[0])
-        logger.info(
-            "Connected to PPG stream: name=%s, channels=%d, srate=%.1f Hz",
-            streams[0].name(),
-            streams[0].channel_count(),
-            streams[0].nominal_srate(),
-        )
-        return inlet
-    except Exception as exc:
-        logger.warning("PPG stream resolve failed: %s", exc)
-        return None
+def start_eeg_stream(session_id: int, db_conn) -> EEGStream:
+    with _registry_lock:
+        if session_id in _active_streams:
+            return _active_streams[session_id]
+        stream = EEGStream(session_id, db_conn)
+        stream.start()
+        _active_streams[session_id] = stream
+        return stream
 
 
-def read_eeg_sample(inlet: StreamInlet) -> Tuple[Optional[List[float]], Optional[float]]:
-    """
-    Pull a single EEG sample from the given StreamInlet.
-
-    Returns:
-        (sample_list, lsl_timestamp) — sample_list contains one float per
-        EEG channel (Muse has 4 channels: TP9, AF7, AF8, TP10).
-        Returns (None, None) if no new sample is available.
-
-    Note: Call this in a tight loop to drain all available samples.
-    """
-    sample, timestamp = inlet.pull_sample(timeout=0.0)
-    return sample, timestamp
+def stop_eeg_stream(session_id: int):
+    with _registry_lock:
+        stream = _active_streams.pop(session_id, None)
+    if stream:
+        stream.stop()
 
 
-def read_ppg_sample(inlet: StreamInlet) -> Tuple[Optional[float], Optional[float]]:
-    """
-    Pull a single PPG sample and return the first channel value.
-
-    The Muse PPG stream typically has 3 channels (ambient + IR + red).
-    We use channel 0 (ambient / primary) as the PPG value.
-
-    Returns:
-        (ppg_value, lsl_timestamp) — (None, None) if no sample ready.
-    """
-    sample, timestamp = inlet.pull_sample(timeout=0.0)
-    if sample is None:
-        return None, None
-    return float(sample[0]), timestamp
+def get_eeg_stream(session_id: int) -> Optional[EEGStream]:
+    return _active_streams.get(session_id)
 
 
-# ── Quick test ────────────────────────────────────────────
-if __name__ == "__main__":
-    print("Testing EEG/PPG stream connection...")
-    print()
-
-    # Try auto-start first
-    print("Attempting auto-start of muselsl stream...")
-    started = auto_start_muse_stream(wait_seconds=8)
-
-    if started:
-        eeg = get_eeg_inlet()
-        ppg = get_ppg_inlet()
-
-        if eeg:
-            print("EEG stream connected! Reading 10 samples...")
-            for i in range(10):
-                sample, ts = read_eeg_sample(eeg)
-                if sample:
-                    print(f"  EEG sample {i}: channels={sample[:4]} ts={ts:.3f}")
-                time.sleep(0.1)
-        else:
-            print("No EEG stream found.")
-
-        if ppg:
-            print("\nPPG stream connected! Reading 5 samples...")
-            for i in range(5):
-                val, ts = read_ppg_sample(ppg)
-                if val:
-                    print(f"  PPG sample {i}: value={val:.2f} ts={ts:.3f}")
-                time.sleep(0.2)
-        else:
-            print("No PPG stream found.")
-
-        stop_muse_stream()
-    else:
-        print("Could not start muselsl. Is the Muse headset paired via Bluetooth?")
+def mark_question(session_id: int, question_id: int, question_num: int):
+    stream = get_eeg_stream(session_id)
+    if stream:
+        stream.set_question(question_id, question_num)

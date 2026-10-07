@@ -42,7 +42,7 @@ def get_connection() -> pyodbc.Connection:
 
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            conn = pyodbc.connect(conn_str, timeout=5)
+            conn = pyodbc.connect(conn_str, timeout=15)
             conn.autocommit = False
             return conn
         except pyodbc.Error as exc:

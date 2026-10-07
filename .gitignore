@@ -2,10 +2,23 @@ venv/
 __pycache__/
 *.pyc
 .env
+.env.*
 .DS_Store
 frontend/
 emotion_images/
+dataset/
 ml/dataset/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.bmp
+*.ico
+*.sqlite
+*.sqlite3
+*.db
+*.log
 SYSTEM_GUIDE.md
 TECHNICAL_GUIDE.md
 questionaire and camera working.txt

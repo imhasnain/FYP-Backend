@@ -28,13 +28,11 @@ class EndSessionRequest(BaseModel):
 
 
 class EndSessionResponse(BaseModel):
-    """
-    Response body for POST /session/end.
-    Includes the ML prediction result after processing all session data.
-    """
+    """Response body for POST /session/end with scoring results."""
 
     session_id: int
     recommendation: str      # 'Normal' | 'Calm Down' | 'See Psychologist' | 'Emergency'
+    referral_note: Optional[str] = None
     final_score: float
     confidence: float        # Model prediction confidence 0.0–1.0
     ended_at: datetime

@@ -17,9 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from database import get_connection, test_connection
-from routers import auth, sessions, questionnaire, sensors, results
+from routers import auth, sessions, questionnaire, sensors, results, psychologist, advisor, eeg
 from websocket.eeg_handler import eeg_websocket_handler
-from ml.predictor import load_models, models_loaded
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,29 +31,17 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("=== Virtual Clinic Backend starting up ===")
-
     os.makedirs(settings.EMOTION_IMAGES_DIR, exist_ok=True)
 
-    # Verify DB connection
     try:
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT GETDATE() AS now")
         row = cursor.fetchone()
         conn.close()
-        logger.info("✅ Database connection OK — SQL Server time: %s", row.now)
+        logger.info("Database connection OK — SQL Server time: %s", row.now)
     except Exception as exc:
-        logger.error("❌ Database connection FAILED: %s", exc)
-
-    # Load ML models
-    try:
-        load_models()
-        if models_loaded():
-            logger.info("✅ ML models loaded successfully.")
-        else:
-            logger.warning("⚠️  ML models not found. Run 'python -m ml.trainer' to train them.")
-    except Exception as exc:
-        logger.error("❌ ML model loading failed: %s", exc)
+        logger.error("Database connection FAILED: %s", exc)
 
     logger.info("=== Virtual Clinic Backend is READY ===")
     yield
@@ -63,7 +50,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Multimodal Virtual Clinic API",
-    description="FYP Backend — EEG, BP, Facial Emotion & Questionnaire mental health assessment.",
+    description="EEG, BP, Facial Emotion & Questionnaire mental health assessment.",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -81,7 +68,9 @@ app.include_router(sessions.router)
 app.include_router(questionnaire.router)
 app.include_router(sensors.router)
 app.include_router(results.router)
-
+app.include_router(psychologist.router)
+app.include_router(advisor.router)
+app.include_router(eeg.router)
 
 @app.websocket("/ws/eeg/{session_id}")
 async def websocket_eeg(websocket: WebSocket, session_id: int):
@@ -95,4 +84,4 @@ def root():
 
 @app.get("/health", tags=["Health"])
 def health_check():
-    return {"db_connected": test_connection(), "models_loaded": models_loaded()}
+    return {"db_connected": test_connection()}
